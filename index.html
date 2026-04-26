@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 图片生成</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #222;
+    background: #fafafa;
+    padding: 40px 20px 80px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 24px; }
+
+  label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
+  textarea, input, select {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 14px;
+    font-family: inherit;
+    color: #222;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    outline: none;
+  }
+  textarea { min-height: 100px; resize: vertical; }
+  textarea:focus, input:focus, select:focus { border-color: #888; }
+
+  .field { margin-bottom: 14px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr 100px; gap: 12px; margin-bottom: 14px; }
+
+  .hint { font-size: 12px; color: #888; margin-top: 6px; }
+
+  details { margin: 6px 0 16px; }
+  details summary { cursor: pointer; font-size: 13px; color: #666; user-select: none; padding: 4px 0; }
+  details[open] summary { margin-bottom: 10px; }
+
+  button {
+    width: 100%;
+    padding: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #fff;
+    background: #222;
+    border: 0;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #000; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  #status {
+    margin-top: 14px;
+    font-size: 13px;
+    color: #666;
+    min-height: 18px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  #status.err { color: #c0392b; }
+
+  #results { margin-top: 24px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card { border: 1px solid #e4e4e4; border-radius: 6px; overflow: hidden; background: #fff; }
+  .card img { width: 100%; display: block; }
+  .card .bar { padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #888; }
+  .card a { color: #222; text-decoration: none; font-weight: 500; }
+  .card a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AI 图片生成</h1>
+
+  <div class="field">
+    <label>Prompt</label>
+    <textarea id="prompt" placeholder="描述想生成的图像……"></textarea>
+    <div class="hint">按 Cmd / Ctrl + Enter 提交</div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>尺寸</label>
+      <select id="size">
+        <option value="auto">auto</option>
+        <option value="1024x1024" selected>1024×1024</option>
+        <option value="1536x1024">1536×1024</option>
+        <option value="1024x1536">1024×1536</option>
+        <option value="1792x1024">1792×1024</option>
+        <option value="1024x1792">1024×1792</option>
+        <option value="1280x1280">1280×1280</option>
+        <option value="2048x2048">2048×2048</option>
+        <option value="512x512">512×512</option>
+        <option value="256x256">256×256</option>
+      </select>
+    </div>
+    <div>
+      <label>质量</label>
+      <select id="quality">
+        <option value="auto" selected>auto</option>
+        <option value="high">high</option>
+        <option value="medium">medium</option>
+        <option value="low">low</option>
+      </select>
+    </div>
+    <div>
+      <label>张数</label>
+      <input type="number" id="n" min="1" max="1" value="1">
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>背景</label>
+      <select id="background">
+        <option value="auto" selected>auto</option>
+        <option value="transparent">transparent</option>
+        <option value="opaque">opaque</option>
+      </select>
+    </div>
+    <div>
+      <label>输出格式</label>
+      <select id="outputFormat">
+        <option value="png" selected>png</option>
+        <option value="jpeg">jpeg</option>
+        <option value="webp">webp</option>
+      </select>
+    </div>
+    <div>
+      <label>状态</label>
+      <input type="text" value="自动返回图片" disabled>
+    </div>
+  </div>
+  <div class="hint" style="margin-top:-8px;margin-bottom:14px;">页面已固定走服务器同域接口和稳定返回模式。当前单次最多生成 1 张；本地调试请先运行 <code>node server.js</code>。</div>
+
+  <button id="go">生成</button>
+  <div id="status"></div>
+
+  <div id="results"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const btn = $("go"), statusEl = $("status"), resultsEl = $("results");
+const CONFIG = {
+  appConfigPath: "/app-config.json",
+  apiPath: "/api/images/generations",
+  model: "gpt-image-2",
+  responseFormat: "b64_json",
+};
+const STORAGE_KEY = "picklyone-image-ui-v3";
+
+restoreForm();
+bindPersistence();
+loadConfig();
+
+async function go() {
+  const prompt = $("prompt").value.trim();
+  if (!prompt) { setStatus("请输入 prompt", true); return; }
+
+  const body = {
+    model: CONFIG.model,
+    prompt,
+    size: $("size").value,
+    quality: $("quality").value,
+    background: $("background").value,
+    output_format: $("outputFormat").value,
+    response_format: CONFIG.responseFormat,
+    n: Math.min(1, Math.max(1, parseInt($("n").value, 10) || 1)),
+  };
+  const url = CONFIG.apiPath;
+
+  btn.disabled = true;
+  btn.textContent = "生成中…";
+  setStatus("生成中……");
+  resultsEl.innerHTML = "";
+
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 300000);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); }
+    catch { throw new Error("HTTP " + res.status + "\n" + text.slice(0, 400)); }
+    if (!res.ok) {
+      throw new Error(
+        "HTTP " + res.status + "：" + (json?.error?.message || json?.message || text) +
+        (json?.error?.code ? " (" + json.error.code + ")" : "")
+      );
+    }
+    if (!json.data?.length) throw new Error("响应无 data 字段\n" + text.slice(0, 400));
+
+    const rendered = render(json.data, prompt, body.output_format);
+    if (!rendered) {
+      throw new Error(
+        "接口已返回 data，但没有可渲染的图片字段。当前实测建议使用 response_format=b64_json。"
+      );
+    }
+    setStatus(`完成 · ${rendered} 张 · ${((Date.now()-t0)/1000).toFixed(1)}s`);
+  } catch (err) {
+    console.error("[gpt-image-2] fetch failed:", err, "cause:", err.cause);
+    let msg;
+    if (err.name === "AbortError") {
+      msg = `超过 300s 未返回，已中断 · 用时 ${((Date.now()-t0)/1000).toFixed(1)}s`;
+    } else {
+      const parts = [
+        `${err.name || "Error"}: ${err.message || String(err)}`,
+        err.cause ? `cause: ${err.cause.code || err.cause.message || String(err.cause)}` : null,
+        `online: ${navigator.onLine} · 用时 ${((Date.now()-t0)/1000).toFixed(1)}s`,
+        "如果是 Failed to fetch，请确认服务已启动：node server.js",
+        "真正的 net::ERR_* 看 DevTools → Network 那条请求的 Status 列",
+      ].filter(Boolean);
+      msg = parts.join("\n");
+    }
+    setStatus(msg, true);
+  } finally {
+    clearTimeout(timer);
+    btn.disabled = false;
+    btn.textContent = "生成";
+  }
+}
+
+function setStatus(text, isErr) {
+  statusEl.textContent = text;
+  statusEl.classList.toggle("err", !!isErr);
+}
+
+function render(data, prompt, outputFormat) {
+  const slug = prompt.slice(0, 24).replace(/[\s\\/:*?"<>|]+/g, "_");
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const ext = outputFormat === "jpeg" ? "jpg" : outputFormat || "png";
+  const mime = outputFormat === "jpeg" ? "image/jpeg" : outputFormat === "webp" ? "image/webp" : "image/png";
+  let rendered = 0;
+  data.forEach((item, i) => {
+    const src = item.b64_json ? `data:${mime};base64,${item.b64_json}` : item.url;
+    if (!src) return;
+    const filename = `${slug}_${ts}_${i+1}.${ext}`;
+    const revised = item.revised_prompt ? `<span title="${escapeHtml(item.revised_prompt)}">prompt 已优化</span>` : `<span>#${i+1}</span>`;
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <img src="${src}" alt="">
+      <div class="bar">
+        ${revised}
+        <a href="${src}" download="${filename}">下载</a>
+      </div>`;
+    resultsEl.appendChild(card);
+    rendered += 1;
+  });
+  return rendered;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function restoreForm() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    if (saved.prompt) $("prompt").value = saved.prompt;
+    if (saved.size) $("size").value = saved.size;
+    if (saved.quality) $("quality").value = saved.quality;
+    if (saved.background) $("background").value = saved.background;
+    if (saved.outputFormat) $("outputFormat").value = saved.outputFormat;
+  } catch (_) {}
+}
+
+function bindPersistence() {
+  ["prompt", "size", "quality", "background", "outputFormat"].forEach(id => {
+    $(id).addEventListener(id === "prompt" ? "input" : "change", persistForm);
+  });
+}
+
+function persistForm() {
+  const data = {
+    prompt: $("prompt").value,
+    size: $("size").value,
+    quality: $("quality").value,
+    background: $("background").value,
+    outputFormat: $("outputFormat").value,
+  };
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (_) {}
+}
+
+async function loadConfig() {
+  try {
+    const res = await fetch(CONFIG.appConfigPath, { cache: "no-store" });
+    if (!res.ok) return;
+    const json = await res.json();
+    if (json?.imageModel) {
+      CONFIG.model = json.imageModel;
+    }
+  } catch (_) {}
+}
+
+btn.addEventListener("click", go);
+$("prompt").addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") go();
+});
+</script>
+</body>
+</html>
