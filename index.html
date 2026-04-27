@@ -189,10 +189,10 @@ async function go() {
     try { json = JSON.parse(text); }
     catch { throw new Error("HTTP " + res.status + "\n" + text.slice(0, 400)); }
     if (!res.ok) {
-      throw new Error(
-        "HTTP " + res.status + "：" + (json?.error?.message || json?.message || text) +
-        (json?.error?.code ? " (" + json.error.code + ")" : "")
-      );
+      const code = json?.error?.code || "";
+      const message = json?.error?.message || json?.message || text;
+      const friendly = getFriendlyErrorMessage(res.status, code, message);
+      throw new Error(friendly || ("HTTP " + res.status + "：" + message + (code ? " (" + code + ")" : "")));
     }
     if (!json.data?.length) throw new Error("响应无 data 字段\n" + text.slice(0, 400));
 
@@ -263,6 +263,25 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function getFriendlyErrorMessage(status, code, message) {
+  if (code === "NO_GATEWAY_AVAILABLE") {
+    return "图片服务暂时繁忙，请稍后再试。";
+  }
+  if (code === "upstream_error" || status === 502 || status === 503) {
+    return "图片生成服务暂时不稳定，请稍后重试。";
+  }
+  if (code === "MODEL_ACCESS_DENIED") {
+    return "当前图片模型暂时不可用，请稍后再试。";
+  }
+  if (code === "invalid_api_key" || status === 401) {
+    return "服务鉴权失败，请联系管理员检查接口配置。";
+  }
+  if (code === "insufficient_balance" || status === 402) {
+    return "服务余额不足，请联系管理员充值后再试。";
+  }
+  return "";
 }
 
 function restoreForm() {
