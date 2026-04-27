@@ -73,10 +73,116 @@
   .card a { color: #222; text-decoration: none; font-weight: 500; }
   .card a:hover { text-decoration: underline; }
 
-  .ref-preview { margin-top: 8px; display: flex; align-items: center; gap: 12px; }
-  .ref-preview img { width: 96px; height: 96px; object-fit: cover; border: 1px solid #e4e4e4; border-radius: 6px; background: #fff; }
-  .ref-clear { width: auto; padding: 6px 12px; font-size: 12px; background: #fff; color: #666; border: 1px solid #ddd; }
-  .ref-clear:hover:not(:disabled) { background: #f5f5f5; color: #222; }
+  .ref-uploader { position: relative; }
+
+  .ref-dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 34px 20px;
+    border: 1.5px dashed #d4d4d4;
+    border-radius: 6px;
+    background: #fff;
+    color: #555;
+    cursor: pointer;
+    user-select: none;
+    text-align: center;
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      color 180ms ease,
+      transform 180ms ease;
+  }
+  .ref-dropzone:hover {
+    border-color: #999;
+    background: #fcfcfc;
+    color: #222;
+    transform: translateY(-1px);
+  }
+  .ref-dropzone.is-dragging {
+    border-style: solid;
+    border-color: #222;
+    background: #f4f4f4;
+    color: #111;
+    transform: translateY(-1px);
+  }
+
+  .ref-dropzone-icon { color: #999; transition: color 180ms ease; }
+  .ref-dropzone:hover .ref-dropzone-icon,
+  .ref-dropzone.is-dragging .ref-dropzone-icon { color: #222; }
+
+  .ref-dropzone-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    letter-spacing: 0.01em;
+  }
+  .ref-dropzone-sep { color: #ccc; font-weight: 300; }
+  .ref-dropzone-cta {
+    color: #222;
+    border-bottom: 1px solid #222;
+    padding-bottom: 1px;
+  }
+
+  .ref-dropzone-meta {
+    font-size: 11px;
+    color: #aaa;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .ref-preview {
+    position: relative;
+    border: 1px solid #e4e4e4;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #fff;
+  }
+  .ref-preview img {
+    display: block;
+    width: 100%;
+    max-height: 260px;
+    object-fit: cover;
+  }
+
+  .ref-clear {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    background: rgba(255, 255, 255, 0.88);
+    color: #333;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition:
+      background 180ms ease,
+      color 180ms ease,
+      border-color 180ms ease,
+      transform 180ms ease,
+      box-shadow 180ms ease;
+  }
+  .ref-clear:hover:not(:disabled) {
+    background: #fff;
+    color: #000;
+    border-color: rgba(0, 0, 0, 0.2);
+    transform: scale(1.06);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  }
+  .ref-clear:active { transform: scale(0.96); }
+
+  #refPreview:not([hidden]) + .ref-dropzone { display: none; }
 </style>
 </head>
 <body>
@@ -85,12 +191,31 @@
 
   <div class="field">
     <label>参考图（可选）</label>
-    <input type="file" id="refImage" accept="image/*">
-    <div id="refPreview" class="ref-preview" hidden>
-      <img id="refPreviewImg" alt="">
-      <button type="button" id="refClear" class="ref-clear">移除</button>
+    <div class="ref-uploader">
+      <input type="file" id="refImage" accept="image/*" hidden>
+      <div id="refPreview" class="ref-preview" hidden>
+        <img id="refPreviewImg" alt="">
+        <button type="button" id="refClear" class="ref-clear" aria-label="移除参考图">
+          <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+            <path d="M3 3l10 10M13 3L3 13"/>
+          </svg>
+        </button>
+      </div>
+      <label for="refImage" class="ref-dropzone" id="refDropzone">
+        <svg class="ref-dropzone-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="4.5" width="18" height="15" rx="1.5"/>
+          <circle cx="8.5" cy="10" r="1.4"/>
+          <path d="M3 16.5l5.5-4.5 4 3 3-2.2L21 17"/>
+        </svg>
+        <div class="ref-dropzone-text">
+          <span>拖放图片到这里</span>
+          <span class="ref-dropzone-sep">/</span>
+          <span class="ref-dropzone-cta">点击选择</span>
+        </div>
+        <div class="ref-dropzone-meta">JPG &middot; PNG &middot; WebP &nbsp;|&nbsp; 最大 25MB</div>
+      </label>
     </div>
-    <div class="hint">上传后走图生图，prompt 描述要做的修改；不传则按 prompt 生图。建议 ≤ 10MB，最大 25MB。</div>
+    <div class="hint">上传后走图生图，prompt 描述要做的修改；不传则按 prompt 生图。建议 &le; 10MB。</div>
   </div>
 
   <div class="field">
@@ -416,6 +541,36 @@ $("refClear").addEventListener("click", () => {
   refInput.value = "";
   refInput.dispatchEvent(new Event("change"));
 });
+
+(() => {
+  const drop = document.getElementById("refDropzone");
+  const input = document.getElementById("refImage");
+  if (!drop || !input) return;
+
+  let depth = 0;
+  drop.addEventListener("dragenter", e => {
+    e.preventDefault();
+    depth++;
+    drop.classList.add("is-dragging");
+  });
+  drop.addEventListener("dragover", e => { e.preventDefault(); });
+  drop.addEventListener("dragleave", e => {
+    e.preventDefault();
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) drop.classList.remove("is-dragging");
+  });
+  drop.addEventListener("drop", e => {
+    e.preventDefault();
+    depth = 0;
+    drop.classList.remove("is-dragging");
+    const file = e.dataTransfer?.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+})();
 </script>
 </body>
 </html>
