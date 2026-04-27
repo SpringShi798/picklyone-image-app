@@ -86,7 +86,9 @@ server.listen(PORT, HOST, () => {
 
 function proxyApiRequest(clientReq, clientRes, pathname) {
   const t0 = Date.now();
-  const upstreamPath = pathname.replace(API_PREFIX, API_VERSION_PREFIX);
+  const upstreamPath = pathname === "/api/upload"
+    ? "/api/v1/upload"
+    : pathname.replace(API_PREFIX, API_VERSION_PREFIX);
   const target = new URL(upstreamPath + (new URL(clientReq.url, "http://localhost").search || ""), UPSTREAM);
   const bodyOverride = shouldOverrideImageModel(target.pathname, clientReq) ? IMAGE_MODEL : "";
   const headers = {
@@ -239,7 +241,9 @@ function createUpstreamRequest(clientReq, clientRes, target, headers, t0) {
 }
 
 function shouldOverrideImageModel(pathname, req) {
-  return pathname === "/v1/images/generations" &&
+  const isImageJsonEndpoint =
+    pathname === "/v1/images/generations" || pathname === "/v1/images/edits";
+  return isImageJsonEndpoint &&
     req.method === "POST" &&
     req.headers["content-type"] &&
     req.headers["content-type"].includes("application/json");

@@ -72,11 +72,26 @@
   .card .bar { padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #888; }
   .card a { color: #222; text-decoration: none; font-weight: 500; }
   .card a:hover { text-decoration: underline; }
+
+  .ref-preview { margin-top: 8px; display: flex; align-items: center; gap: 12px; }
+  .ref-preview img { width: 96px; height: 96px; object-fit: cover; border: 1px solid #e4e4e4; border-radius: 6px; background: #fff; }
+  .ref-clear { width: auto; padding: 6px 12px; font-size: 12px; background: #fff; color: #666; border: 1px solid #ddd; }
+  .ref-clear:hover:not(:disabled) { background: #f5f5f5; color: #222; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>AI 图片生成</h1>
+
+  <div class="field">
+    <label>参考图（可选）</label>
+    <input type="file" id="refImage" accept="image/*">
+    <div id="refPreview" class="ref-preview" hidden>
+      <img id="refPreviewImg" alt="">
+      <button type="button" id="refClear" class="ref-clear">移除</button>
+    </div>
+    <div class="hint">上传后走图生图，prompt 描述要做的修改；不传则按 prompt 生图。建议 ≤ 10MB，最大 25MB。</div>
+  </div>
 
   <div class="field">
     <label>Prompt</label>
@@ -144,9 +159,12 @@ const btn = $("go"), statusEl = $("status"), resultsEl = $("results");
 const CONFIG = {
   appConfigPath: "app-config.json",
   apiPath: "api/images/generations",
+  editsPath: "api/images/edits",
+  uploadPath: "api/upload",
   model: "gpt-image-2",
   responseFormat: "b64_json",
 };
+const MAX_REF_BYTES = 25 * 1024 * 1024;
 const STORAGE_KEY = "picklyone-image-ui-v3";
 
 restoreForm();
@@ -156,6 +174,12 @@ loadConfig();
 async function go() {
   const prompt = $("prompt").value.trim();
   if (!prompt) { setStatus("请输入 prompt", true); return; }
+
+  const refFile = $("refImage").files[0] || null;
+  if (refFile && refFile.size > MAX_REF_BYTES) {
+    setStatus(`参考图过大（${(refFile.size / 1024 / 1024).toFixed(1)}MB），请控制在 25MB 以内`, true);
+    return;
+  }
 
   const body = {
     model: CONFIG.model,
@@ -167,23 +191,35 @@ async function go() {
     response_format: CONFIG.responseFormat,
     n: Math.min(1, Math.max(1, parseInt($("n").value, 10) || 1)),
   };
-  const url = CONFIG.apiPath;
 
   btn.disabled = true;
   btn.textContent = "生成中…";
-  setStatus("生成中……");
   resultsEl.innerHTML = "";
 
   const t0 = Date.now();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 300000);
   try {
-    const res = await fetch(url, {
+    let url = CONFIG.apiPath;
+    if (refFile) {
+      setStatus("上传参考图……");
+      const imageKey = await uploadReferenceImage(refFile, ctrl.signal);
+      body.image_key = imageKey;
+      url = CONFIG.editsPath;
+    }
+    setStatus("生成中……");
+
+    const postJson = () => fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
+    let res = await postJson();
+    if (res.status === 409 && refFile) {
+      await new Promise(r => setTimeout(r, 1500));
+      res = await postJson();
+    }
     const text = await res.text();
     let json;
     try { json = JSON.parse(text); }
@@ -265,6 +301,25 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
+async function uploadReferenceImage(file, signal) {
+  const form = new FormData();
+  form.append("files", file, file.name || "reference");
+  const res = await fetch(CONFIG.uploadPath, { method: "POST", body: form, signal });
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); }
+  catch { throw new Error("上传失败：HTTP " + res.status + "\n" + text.slice(0, 400)); }
+  if (!res.ok) {
+    const code = json?.error?.code || "";
+    const message = json?.error?.message || json?.message || text;
+    const friendly = getFriendlyErrorMessage(res.status, code, message);
+    throw new Error(friendly || ("上传失败：HTTP " + res.status + "：" + message + (code ? " (" + code + ")" : "")));
+  }
+  const key = json?.uploaded?.[0]?.key;
+  if (!key) throw new Error("上传响应缺少 key 字段\n" + text.slice(0, 400));
+  return key;
+}
+
 function getFriendlyErrorMessage(status, code, message) {
   if (code === "NO_GATEWAY_AVAILABLE") {
     return "图片服务暂时繁忙，请稍后再试。";
@@ -280,6 +335,15 @@ function getFriendlyErrorMessage(status, code, message) {
   }
   if (code === "insufficient_balance" || status === 402) {
     return "服务余额不足，请联系管理员充值后再试。";
+  }
+  if (code === "IMAGE_TOO_LARGE") {
+    return "参考图过大，请控制在 25MB 以内（建议 ≤ 10MB）。";
+  }
+  if (code === "IMAGE_TYPE_UNSUPPORTED") {
+    return "参考图格式不支持，请使用 JPG / PNG / WebP。";
+  }
+  if (code === "content_policy_violation") {
+    return "内容审核未通过，请调整 prompt 或参考图后重试。";
   }
   return "";
 }
@@ -328,6 +392,29 @@ async function loadConfig() {
 btn.addEventListener("click", go);
 $("prompt").addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") go();
+});
+
+const refInput = $("refImage");
+const refPreview = $("refPreview");
+const refPreviewImg = $("refPreviewImg");
+let refPreviewUrl = "";
+
+refInput.addEventListener("change", () => {
+  const file = refInput.files[0];
+  if (refPreviewUrl) { URL.revokeObjectURL(refPreviewUrl); refPreviewUrl = ""; }
+  if (file) {
+    refPreviewUrl = URL.createObjectURL(file);
+    refPreviewImg.src = refPreviewUrl;
+    refPreview.hidden = false;
+  } else {
+    refPreviewImg.removeAttribute("src");
+    refPreview.hidden = true;
+  }
+});
+
+$("refClear").addEventListener("click", () => {
+  refInput.value = "";
+  refInput.dispatchEvent(new Event("change"));
 });
 </script>
 </body>
