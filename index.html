@@ -328,7 +328,11 @@
         </div>
         <div>
           <label>张数</label>
-          <input type="number" id="n" min="1" max="1" value="1">
+          <select id="n">
+            <option value="1" selected>1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
         </div>
       </div>
       <div class="row single">
@@ -395,7 +399,7 @@ async function go() {
     quality: $("quality").value,
     output_format: $("outputFormat").value,
     response_format: CONFIG.responseFormat,
-    n: Math.min(1, Math.max(1, parseInt($("n").value, 10) || 1)),
+    n: Math.min(3, Math.max(1, parseInt($("n").value, 10) || 1)),
   };
 
   btn.disabled = true;
@@ -566,11 +570,12 @@ function restoreForm() {
     }
     if (saved.quality) $("quality").value = saved.quality;
     if (saved.outputFormat) $("outputFormat").value = saved.outputFormat;
+    if (saved.n && ["1", "2", "3"].includes(String(saved.n))) $("n").value = String(saved.n);
   } catch (_) {}
 }
 
 function bindPersistence() {
-  ["prompt", "size", "quality", "outputFormat"].forEach(id => {
+  ["prompt", "size", "quality", "outputFormat", "n"].forEach(id => {
     $(id).addEventListener(id === "prompt" ? "input" : "change", persistForm);
   });
 }
@@ -581,6 +586,7 @@ function persistForm() {
     size: $("size").value,
     quality: $("quality").value,
     outputFormat: $("outputFormat").value,
+    n: $("n").value,
   };
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));

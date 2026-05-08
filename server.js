@@ -21,6 +21,7 @@ const ALLOWED_ORIGIN = process.env.APP_ORIGIN || "";
 const GRSAI_API_KEY = process.env.GRSAI_API_KEY || "";
 const GRSAI_HOST = new URL(process.env.GRSAI_HOST || "https://grsaiapi.com");
 const GRSAI_MODEL = process.env.GRSAI_MODEL || "gpt-image-2";
+const MAX_SLOTS = 3;
 const FALLBACK_TRIGGER_CODES = new Set([
   "NO_GATEWAY_AVAILABLE",
   "MODEL_ACCESS_DENIED",
@@ -103,9 +104,8 @@ function proxyApiRequest(clientReq, clientRes, pathname) {
     ? "/api/v1/upload"
     : pathname.replace(API_PREFIX, API_VERSION_PREFIX);
   const target = new URL(upstreamPath + (new URL(clientReq.url, "http://localhost").search || ""), UPSTREAM);
-  const overrideModel = shouldOverrideImageModel(target.pathname, clientReq);
-  const fallbackEnabled = !!GRSAI_API_KEY
-    && target.pathname === "/v1/images/generations"
+  const isImageJsonEndpoint =
+    (target.pathname === "/v1/images/generations" || target.pathname === "/v1/images/edits")
     && clientReq.method === "POST"
     && (clientReq.headers["content-type"] || "").includes("application/json");
 
@@ -117,7 +117,7 @@ function proxyApiRequest(clientReq, clientRes, pathname) {
     headers["user-agent"] = clientReq.headers["user-agent"];
   }
 
-  if (!overrideModel && !fallbackEnabled) {
+  if (!isImageJsonEndpoint) {
     if (clientReq.headers["content-length"]) {
       headers["content-length"] = clientReq.headers["content-length"];
     }
@@ -128,7 +128,7 @@ function proxyApiRequest(clientReq, clientRes, pathname) {
 
   const chunks = [];
   clientReq.on("data", chunk => chunks.push(chunk));
-  clientReq.on("end", () => {
+  clientReq.on("end", async () => {
     let payload;
     try {
       const originalBody = Buffer.concat(chunks).toString("utf8");
@@ -140,74 +140,65 @@ function proxyApiRequest(clientReq, clientRes, pathname) {
       });
       return;
     }
-    if (overrideModel) payload.model = IMAGE_MODEL;
-    const upstreamBody = JSON.stringify(payload);
-    headers["content-length"] = Buffer.byteLength(upstreamBody);
+    payload.model = IMAGE_MODEL;
+    const slotsRequested = clamp(parseInt(payload.n, 10) || 1, 1, MAX_SLOTS);
+    const isGenerations = target.pathname === "/v1/images/generations";
+    const fallbackOk = !!GRSAI_API_KEY && isGenerations;
+    const slotPayload = { ...payload, n: 1 };
 
-    if (!fallbackEnabled) {
-      const upstreamReq = createUpstreamRequest(clientReq, clientRes, target, headers, t0);
-      upstreamReq.end(upstreamBody);
+    const settled = await Promise.allSettled(
+      Array.from({ length: slotsRequested }, () =>
+        callOneImageSlot(slotPayload, target, headers, fallbackOk)
+      )
+    );
+
+    const successes = [];
+    const failures = [];
+    for (const s of settled) {
+      if (s.status === "fulfilled") successes.push(s.value);
+      else failures.push(s.reason);
+    }
+
+    if (successes.length > 0) {
+      const data = successes.flatMap((s) => (Array.isArray(s.data) ? s.data : []));
+      writeCorsHeaders(clientReq, clientRes);
+      writeJson(clientRes, 200, { created: Math.floor(Date.now() / 1000), data });
+      console.log(
+        `[${new Date().toISOString()}] ${clientReq.method} ${clientReq.url} -> 200 (${successes.length}/${slotsRequested} ok) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
+      );
       return;
     }
 
-    callPicklyoneBuffered(target, headers, upstreamBody)
-      .then((result) => {
-        if (shouldFallbackToGrsai(result)) {
-          logUpstreamError(clientReq, result, t0);
-          return callGrsai(payload).then((fallbackJson) => {
-            writeCorsHeaders(clientReq, clientRes);
-            writeJson(clientRes, 200, fallbackJson);
-            console.log(
-              `[${new Date().toISOString()}] ${clientReq.method} ${clientReq.url} -> 200 (fallback=grsai) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
-            );
-          }).catch((grsaiErr) => {
-            console.error(
-              `[${new Date().toISOString()}] grsai fallback failed: ${grsaiErr.message}`
-            );
-            if (looksLikeModeration(grsaiErr.message)) {
-              writeCorsHeaders(clientReq, clientRes);
-              writeJson(clientRes, 400, {
-                error: {
-                  message: "Both upstream providers rejected the request, likely due to content moderation.",
-                  code: "content_policy_violation",
-                },
-              });
-              console.log(
-                `[${new Date().toISOString()}] ${clientReq.method} ${clientReq.url} -> 400 (both upstreams flagged moderation) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
-              );
-              return;
-            }
-            forwardBufferedResult(clientReq, clientRes, result, t0);
-          });
-        }
-        forwardBufferedResult(clientReq, clientRes, result, t0);
-      })
-      .catch((err) => {
-        console.error(
-          `[${new Date().toISOString()}] picklyone network error: ${err.message}`
-        );
-        callGrsai(payload)
-          .then((fallbackJson) => {
-            writeCorsHeaders(clientReq, clientRes);
-            writeJson(clientRes, 200, fallbackJson);
-            console.log(
-              `[${new Date().toISOString()}] ${clientReq.method} ${clientReq.url} -> 200 (fallback=grsai after network err) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
-            );
-          })
-          .catch((grsaiErr) => {
-            console.error(
-              `[${new Date().toISOString()}] grsai fallback failed: ${grsaiErr.message}`
-            );
-            if (!clientRes.headersSent) {
-              writeCorsHeaders(clientReq, clientRes);
-              writeJson(clientRes, 502, {
-                error: { message: `proxy upstream error: ${err.message}`, code: "upstream_error" },
-              });
-            } else {
-              clientRes.end();
-            }
-          });
+    if (failures.some((f) => looksLikeModeration(f && f.message))) {
+      writeCorsHeaders(clientReq, clientRes);
+      writeJson(clientRes, 400, {
+        error: {
+          message: "Both upstream providers rejected the request, likely due to content moderation.",
+          code: "content_policy_violation",
+        },
       });
+      console.log(
+        `[${new Date().toISOString()}] ${clientReq.method} ${clientReq.url} -> 400 (moderation) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
+      );
+      return;
+    }
+
+    const firstWithUpstreamResult = failures.find((f) => f && f.picklyoneResult);
+    if (firstWithUpstreamResult) {
+      forwardBufferedResult(clientReq, clientRes, firstWithUpstreamResult.picklyoneResult, t0);
+      return;
+    }
+
+    writeCorsHeaders(clientReq, clientRes);
+    writeJson(clientRes, 502, {
+      error: {
+        message: failures[0]?.message || "all upstream attempts failed",
+        code: "upstream_error",
+      },
+    });
+    console.log(
+      `[${new Date().toISOString()}] ${clientReq.method} ${clientReq.url} -> 502 (all ${slotsRequested} failed) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
+    );
   });
   clientReq.on("error", (err) => {
     writeCorsHeaders(clientReq, clientRes);
@@ -215,6 +206,51 @@ function proxyApiRequest(clientReq, clientRes, pathname) {
       error: { message: `request read error: ${err.message}`, code: "invalid_request" },
     });
   });
+}
+
+async function callOneImageSlot(payload, target, headers, fallbackOk) {
+  const body = JSON.stringify(payload);
+  const slotHeaders = { ...headers, "content-length": Buffer.byteLength(body) };
+  let result;
+  try {
+    result = await callPicklyoneBuffered(target, slotHeaders, body);
+  } catch (netErr) {
+    if (fallbackOk) {
+      try {
+        return await callGrsai(payload);
+      } catch (grsaiErr) {
+        const e = new Error(grsaiErr.message);
+        e.grsaiError = grsaiErr;
+        throw e;
+      }
+    }
+    throw netErr;
+  }
+
+  if (result.statusCode >= 200 && result.statusCode < 300) {
+    try {
+      return JSON.parse(result.body.toString("utf8"));
+    } catch (err) {
+      const e = new Error(`picklyone returned non-JSON: ${err.message}`);
+      e.picklyoneResult = result;
+      throw e;
+    }
+  }
+
+  if (fallbackOk && shouldFallbackToGrsai(result)) {
+    try {
+      return await callGrsai(payload);
+    } catch (grsaiErr) {
+      const e = new Error(grsaiErr.message);
+      e.picklyoneResult = result;
+      e.grsaiError = grsaiErr;
+      throw e;
+    }
+  }
+
+  const e = new Error(`picklyone HTTP ${result.statusCode}`);
+  e.picklyoneResult = result;
+  throw e;
 }
 
 function callPicklyoneBuffered(target, headers, body) {
@@ -270,17 +306,6 @@ function forwardBufferedResult(clientReq, clientRes, result, t0) {
   clientRes.end(result.body);
   console.log(
     `[${new Date().toISOString()}] ${clientReq.method} ${clientReq.url} -> ${result.statusCode} · ${((Date.now() - t0) / 1000).toFixed(1)}s`
-  );
-}
-
-function logUpstreamError(clientReq, result, t0) {
-  let reason = `HTTP ${result.statusCode}`;
-  try {
-    const parsed = JSON.parse(result.body.toString("utf8"));
-    reason += ` ${parsed?.error?.code || parsed?.code || ""}`.trim();
-  } catch (_) {}
-  console.log(
-    `[${new Date().toISOString()}] picklyone failed (${reason}) · ${((Date.now() - t0) / 1000).toFixed(1)}s — trying grsai`
   );
 }
 
@@ -477,14 +502,6 @@ function createUpstreamRequest(clientReq, clientRes, target, headers, t0) {
   return upstreamReq;
 }
 
-function shouldOverrideImageModel(pathname, req) {
-  const isImageJsonEndpoint =
-    pathname === "/v1/images/generations" || pathname === "/v1/images/edits";
-  return isImageJsonEndpoint &&
-    req.method === "POST" &&
-    req.headers["content-type"] &&
-    req.headers["content-type"].includes("application/json");
-}
 
 function writeCorsHeaders(req, res) {
   if (!ALLOWED_ORIGIN) {
