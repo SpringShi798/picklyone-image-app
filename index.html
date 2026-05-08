@@ -83,14 +83,17 @@
   .results-empty {
     border: 1px dashed #e0e0e0;
     border-radius: 6px;
-    padding: 80px 20px;
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     text-align: center;
     color: #aaa;
     font-size: 13px;
     background: #fff;
   }
   .card { border: 1px solid #e4e4e4; border-radius: 6px; overflow: hidden; background: #fff; }
-  .card img { width: 100%; display: block; }
+  .card img { width: 100%; display: block; cursor: zoom-in; }
   .card .bar { padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #888; }
   .card a { color: #222; text-decoration: none; font-weight: 500; }
   .card a:hover { text-decoration: underline; }
@@ -103,7 +106,8 @@
     align-items: center;
     justify-content: center;
     gap: 10px;
-    padding: 34px 20px;
+    padding: 24px;
+    aspect-ratio: 1 / 1;
     border: 1.5px dashed #d4d4d4;
     border-radius: 6px;
     background: #fff;
@@ -162,11 +166,12 @@
     border-radius: 6px;
     overflow: hidden;
     background: #fff;
+    aspect-ratio: 1 / 1;
   }
   .ref-preview img {
     display: block;
     width: 100%;
-    max-height: 260px;
+    height: 100%;
     object-fit: cover;
   }
 
@@ -205,6 +210,63 @@
   .ref-clear:active { transform: scale(0.96); }
 
   #refPreview:not([hidden]) + .ref-dropzone { display: none; }
+
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.94);
+  }
+  .lightbox[hidden] { display: none; }
+  .lightbox-stage {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+  }
+  .lightbox-stage.is-dragging { cursor: grabbing; }
+  .lightbox-stage img {
+    max-width: none;
+    max-height: none;
+    display: block;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  .lightbox-close {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.92);
+    color: #222;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    z-index: 1001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+  .lightbox-close:hover { background: #fff; }
+  .lightbox-hint {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+    z-index: 1001;
+  }
 </style>
 </head>
 <body>
@@ -293,6 +355,14 @@
       <div id="resultsEmpty" class="results-empty">生成的图片会显示在这里</div>
     </div>
   </div>
+</div>
+
+<div id="lightbox" class="lightbox" hidden>
+  <button type="button" id="lightboxClose" class="lightbox-close" aria-label="关闭">&times;</button>
+  <div id="lightboxStage" class="lightbox-stage">
+    <img id="lightboxImg" alt="">
+  </div>
+  <div class="lightbox-hint">拖动查看细节 &middot; 点击空白处或按 ESC 关闭</div>
 </div>
 
 <script>
@@ -588,6 +658,70 @@ $("refClear").addEventListener("click", () => {
     dt.items.add(file);
     input.files = dt.files;
     input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+})();
+
+(() => {
+  const lightbox = $("lightbox");
+  const stage = $("lightboxStage");
+  const img = $("lightboxImg");
+  const closeBtn = $("lightboxClose");
+  if (!lightbox || !stage || !img || !closeBtn) return;
+
+  let prevBodyOverflow = "";
+
+  function open(src) {
+    img.onload = () => {
+      stage.scrollLeft = Math.max(0, (stage.scrollWidth - stage.clientWidth) / 2);
+      stage.scrollTop = Math.max(0, (stage.scrollHeight - stage.clientHeight) / 2);
+    };
+    img.src = src;
+    prevBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    lightbox.hidden = false;
+  }
+
+  function close() {
+    lightbox.hidden = true;
+    img.removeAttribute("src");
+    document.body.style.overflow = prevBodyOverflow;
+  }
+
+  resultsEl.addEventListener("click", (e) => {
+    const target = e.target;
+    if (target && target.tagName === "IMG" && target.src) open(target.src);
+  });
+
+  closeBtn.addEventListener("click", close);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !lightbox.hidden) close();
+  });
+
+  let dragging = false, startX = 0, startY = 0, startScrollX = 0, startScrollY = 0, moved = false;
+  stage.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    dragging = true;
+    moved = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    startScrollX = stage.scrollLeft;
+    startScrollY = stage.scrollTop;
+    stage.classList.add("is-dragging");
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+    stage.scrollLeft = startScrollX - dx;
+    stage.scrollTop = startScrollY - dy;
+  });
+  document.addEventListener("mouseup", (e) => {
+    if (!dragging) return;
+    dragging = false;
+    stage.classList.remove("is-dragging");
+    if (!moved && e.target !== img) close();
   });
 })();
 </script>
