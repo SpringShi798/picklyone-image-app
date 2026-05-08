@@ -15,8 +15,19 @@
     background: #fafafa;
     padding: 40px 20px 80px;
   }
-  .wrap { max-width: 720px; margin: 0 auto; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
   h1 { font-size: 18px; font-weight: 600; margin: 0 0 24px; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 32px;
+    align-items: start;
+  }
+  .layout > .left, .layout > .right { min-width: 0; }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; gap: 24px; }
+  }
 
   label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
   textarea, input, select {
@@ -35,6 +46,7 @@
 
   .field { margin-bottom: 14px; }
   .row { display: grid; grid-template-columns: 1fr 1fr 100px; gap: 12px; margin-bottom: 14px; }
+  .row.single { grid-template-columns: minmax(0, 1fr) 1fr; }
 
   .hint { font-size: 12px; color: #888; margin-top: 6px; }
 
@@ -66,7 +78,17 @@
   }
   #status.err { color: #c0392b; }
 
-  #results { margin-top: 24px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  #results { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  #results:empty { display: none; }
+  .results-empty {
+    border: 1px dashed #e0e0e0;
+    border-radius: 6px;
+    padding: 80px 20px;
+    text-align: center;
+    color: #aaa;
+    font-size: 13px;
+    background: #fff;
+  }
   .card { border: 1px solid #e4e4e4; border-radius: 6px; overflow: hidden; background: #fff; }
   .card img { width: 100%; display: block; }
   .card .bar { padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #888; }
@@ -189,98 +211,93 @@
 <div class="wrap">
   <h1>AI 图片生成</h1>
 
-  <div class="field">
-    <label>参考图（可选）</label>
-    <div class="ref-uploader">
-      <input type="file" id="refImage" accept="image/*" hidden>
-      <div id="refPreview" class="ref-preview" hidden>
-        <img id="refPreviewImg" alt="">
-        <button type="button" id="refClear" class="ref-clear" aria-label="移除参考图">
-          <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-            <path d="M3 3l10 10M13 3L3 13"/>
-          </svg>
-        </button>
-      </div>
-      <label for="refImage" class="ref-dropzone" id="refDropzone">
-        <svg class="ref-dropzone-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="4.5" width="18" height="15" rx="1.5"/>
-          <circle cx="8.5" cy="10" r="1.4"/>
-          <path d="M3 16.5l5.5-4.5 4 3 3-2.2L21 17"/>
-        </svg>
-        <div class="ref-dropzone-text">
-          <span>拖放图片到这里</span>
-          <span class="ref-dropzone-sep">/</span>
-          <span class="ref-dropzone-cta">点击选择</span>
+  <div class="layout">
+    <div class="left">
+      <div class="field">
+        <label>参考图（可选）</label>
+        <div class="ref-uploader">
+          <input type="file" id="refImage" accept="image/*" hidden>
+          <div id="refPreview" class="ref-preview" hidden>
+            <img id="refPreviewImg" alt="">
+            <button type="button" id="refClear" class="ref-clear" aria-label="移除参考图">
+              <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                <path d="M3 3l10 10M13 3L3 13"/>
+              </svg>
+            </button>
+          </div>
+          <label for="refImage" class="ref-dropzone" id="refDropzone">
+            <svg class="ref-dropzone-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="4.5" width="18" height="15" rx="1.5"/>
+              <circle cx="8.5" cy="10" r="1.4"/>
+              <path d="M3 16.5l5.5-4.5 4 3 3-2.2L21 17"/>
+            </svg>
+            <div class="ref-dropzone-text">
+              <span>拖放图片到这里</span>
+              <span class="ref-dropzone-sep">/</span>
+              <span class="ref-dropzone-cta">点击选择</span>
+            </div>
+            <div class="ref-dropzone-meta">JPG &middot; PNG &middot; WebP &nbsp;|&nbsp; 最大 25MB</div>
+          </label>
         </div>
-        <div class="ref-dropzone-meta">JPG &middot; PNG &middot; WebP &nbsp;|&nbsp; 最大 25MB</div>
-      </label>
-    </div>
-    <div class="hint">上传后走图生图，prompt 描述要做的修改；不传则按 prompt 生图。建议 &le; 10MB。</div>
-  </div>
+        <div class="hint">上传后走图生图，prompt 描述要做的修改；不传则按 prompt 生图。建议 &le; 10MB。</div>
+      </div>
 
-  <div class="field">
-    <label>Prompt</label>
-    <textarea id="prompt" placeholder="描述想生成的图像……"></textarea>
-    <div class="hint">按 Cmd / Ctrl + Enter 提交</div>
-  </div>
+      <div class="field">
+        <label>Prompt</label>
+        <textarea id="prompt" placeholder="描述想生成的图像……"></textarea>
+        <div class="hint">按 Cmd / Ctrl + Enter 提交</div>
+      </div>
 
-  <div class="row">
-    <div>
-      <label>尺寸</label>
-      <select id="size">
-        <option value="auto">auto</option>
-        <option value="1024x1024" selected>1024×1024</option>
-        <option value="1536x1024">1536×1024</option>
-        <option value="1024x1536">1024×1536</option>
-        <option value="1792x1024">1792×1024</option>
-        <option value="1024x1792">1024×1792</option>
-        <option value="1280x1280">1280×1280</option>
-        <option value="2048x2048">2048×2048</option>
-        <option value="512x512">512×512</option>
-        <option value="256x256">256×256</option>
-      </select>
+      <div class="row">
+        <div>
+          <label>尺寸</label>
+          <select id="size">
+            <option value="auto">auto</option>
+            <option value="1024x1024" selected>1:1</option>
+            <option value="1792x1024">16:9</option>
+            <option value="1024x1792">9:16</option>
+            <option value="1536x1024">3:2</option>
+            <option value="1024x1536">2:3</option>
+          </select>
+        </div>
+        <div>
+          <label>质量</label>
+          <select id="quality">
+            <option value="auto" selected>auto</option>
+            <option value="high">high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+        <div>
+          <label>张数</label>
+          <input type="number" id="n" min="1" max="1" value="1">
+        </div>
+      </div>
+      <div class="row single">
+        <div>
+          <label>输出格式</label>
+          <select id="outputFormat">
+            <option value="png" selected>png</option>
+            <option value="jpeg">jpeg</option>
+            <option value="webp">webp</option>
+          </select>
+        </div>
+      </div>
+      <button id="go">生成</button>
+      <div id="status"></div>
     </div>
-    <div>
-      <label>质量</label>
-      <select id="quality">
-        <option value="auto" selected>auto</option>
-        <option value="high">high</option>
-        <option value="medium">medium</option>
-        <option value="low">low</option>
-      </select>
-    </div>
-    <div>
-      <label>张数</label>
-      <input type="number" id="n" min="1" max="1" value="1">
-    </div>
-  </div>
-  <div class="row">
-    <div>
-      <label>背景</label>
-      <select id="background">
-        <option value="auto" selected>auto</option>
-        <option value="transparent">transparent</option>
-        <option value="opaque">opaque</option>
-      </select>
-    </div>
-    <div>
-      <label>输出格式</label>
-      <select id="outputFormat">
-        <option value="png" selected>png</option>
-        <option value="jpeg">jpeg</option>
-        <option value="webp">webp</option>
-      </select>
-    </div>
-  </div>
-  <button id="go">生成</button>
-  <div id="status"></div>
 
-  <div id="results"></div>
+    <div class="right">
+      <div id="results"></div>
+      <div id="resultsEmpty" class="results-empty">生成的图片会显示在这里</div>
+    </div>
+  </div>
 </div>
 
 <script>
 const $ = id => document.getElementById(id);
-const btn = $("go"), statusEl = $("status"), resultsEl = $("results");
+const btn = $("go"), statusEl = $("status"), resultsEl = $("results"), resultsEmptyEl = $("resultsEmpty");
 const CONFIG = {
   appConfigPath: "app-config.json",
   apiPath: "api/images/generations",
@@ -311,7 +328,6 @@ async function go() {
     prompt,
     size: $("size").value,
     quality: $("quality").value,
-    background: $("background").value,
     output_format: $("outputFormat").value,
     response_format: CONFIG.responseFormat,
     n: Math.min(1, Math.max(1, parseInt($("n").value, 10) || 1)),
@@ -320,6 +336,7 @@ async function go() {
   btn.disabled = true;
   btn.textContent = "生成中…";
   resultsEl.innerHTML = "";
+  resultsEmptyEl.hidden = false;
 
   const t0 = Date.now();
   const ctrl = new AbortController();
@@ -414,6 +431,7 @@ function render(data, prompt, outputFormat) {
     resultsEl.appendChild(card);
     rendered += 1;
   });
+  if (rendered > 0) resultsEmptyEl.hidden = true;
   return rendered;
 }
 
@@ -477,15 +495,17 @@ function restoreForm() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
     if (saved.prompt) $("prompt").value = saved.prompt;
-    if (saved.size) $("size").value = saved.size;
+    if (saved.size) {
+      const opt = $("size").querySelector(`option[value="${saved.size}"]`);
+      if (opt) $("size").value = saved.size;
+    }
     if (saved.quality) $("quality").value = saved.quality;
-    if (saved.background) $("background").value = saved.background;
     if (saved.outputFormat) $("outputFormat").value = saved.outputFormat;
   } catch (_) {}
 }
 
 function bindPersistence() {
-  ["prompt", "size", "quality", "background", "outputFormat"].forEach(id => {
+  ["prompt", "size", "quality", "outputFormat"].forEach(id => {
     $(id).addEventListener(id === "prompt" ? "input" : "change", persistForm);
   });
 }
@@ -495,7 +515,6 @@ function persistForm() {
     prompt: $("prompt").value,
     size: $("size").value,
     quality: $("quality").value,
-    background: $("background").value,
     outputFormat: $("outputFormat").value,
   };
   try {
