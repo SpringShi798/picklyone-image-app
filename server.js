@@ -164,6 +164,19 @@ function proxyApiRequest(clientReq, clientRes, pathname) {
             console.error(
               `[${new Date().toISOString()}] grsai fallback failed: ${grsaiErr.message}`
             );
+            if (looksLikeModeration(grsaiErr.message)) {
+              writeCorsHeaders(clientReq, clientRes);
+              writeJson(clientRes, 400, {
+                error: {
+                  message: "Both upstream providers rejected the request, likely due to content moderation.",
+                  code: "content_policy_violation",
+                },
+              });
+              console.log(
+                `[${new Date().toISOString()}] ${clientReq.method} ${clientReq.url} -> 400 (both upstreams flagged moderation) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
+              );
+              return;
+            }
             forwardBufferedResult(clientReq, clientRes, result, t0);
           });
         }
@@ -342,6 +355,11 @@ function callGrsai(payload) {
     req.on("error", reject);
     req.end(grsaiBody);
   });
+}
+
+function looksLikeModeration(message) {
+  if (!message) return false;
+  return /moderation|content_policy|policy_violation|nsfw|sensitive/i.test(message);
 }
 
 function normalizeGrsaiSize(size) {
