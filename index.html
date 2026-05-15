@@ -372,6 +372,7 @@ const CONFIG = {
   apiPath: "api/images/generations",
   editsPath: "api/images/edits",
   uploadPath: "api/upload",
+  grsaiEditsPath: "api/grsai/edits",
   model: "gpt-image-2",
   responseFormat: "b64_json",
 };
@@ -413,10 +414,9 @@ async function go() {
   try {
     let url = CONFIG.apiPath;
     if (refFile) {
-      setStatus("上传参考图……");
-      const imageKey = await uploadReferenceImage(refFile, ctrl.signal);
-      body.image_key = imageKey;
-      url = CONFIG.editsPath;
+      setStatus("读取参考图……");
+      body.image_b64 = await readFileAsDataUrl(refFile);
+      url = CONFIG.grsaiEditsPath;
     }
     setStatus("生成中……");
 
@@ -511,6 +511,15 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取参考图失败"));
+    reader.readAsDataURL(file);
+  });
 }
 
 async function uploadReferenceImage(file, signal) {

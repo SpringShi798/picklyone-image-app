@@ -29,7 +29,9 @@ const FALLBACK_TRIGGER_CODES = new Set([
   "service_unavailable",
   "timeout",
   "upstream_timeout",
+  "model_not_found",
 ]);
+const MAX_GRSAI_IMAGE_BYTES = 25 * 1024 * 1024;
 
 if (!API_KEY) {
   console.error("Missing PICKLYONE_API_KEY environment variable.");
@@ -71,6 +73,11 @@ const server = http.createServer((req, res) => {
   if (pathname === "/app-config.json") {
     writeCorsHeaders(req, res);
     writeJson(res, 200, { imageModel: IMAGE_MODEL });
+    return;
+  }
+
+  if (pathname === "/api/grsai/edits") {
+    handleGrsaiDirectEdits(req, res);
     return;
   }
 
@@ -309,14 +316,18 @@ function forwardBufferedResult(clientReq, clientRes, result, t0) {
   );
 }
 
-function callGrsai(payload) {
+function callGrsai(payload, imageUrls) {
   return new Promise((resolve, reject) => {
-    const grsaiBody = JSON.stringify({
+    const grsaiPayload = {
       model: GRSAI_MODEL,
       prompt: payload.prompt,
       size: normalizeGrsaiSize(payload.size),
       n: clamp(parseInt(payload.n, 10) || 1, 1, 4),
-    });
+    };
+    if (Array.isArray(imageUrls) && imageUrls.length > 0) {
+      grsaiPayload.image_urls = imageUrls;
+    }
+    const grsaiBody = JSON.stringify(grsaiPayload);
     const req = https.request(
       {
         hostname: GRSAI_HOST.hostname,
@@ -380,6 +391,147 @@ function callGrsai(payload) {
     req.on("error", reject);
     req.end(grsaiBody);
   });
+}
+
+function handleGrsaiDirectEdits(clientReq, clientRes) {
+  const t0 = Date.now();
+  if (clientReq.method !== "POST") {
+    writeCorsHeaders(clientReq, clientRes);
+    writeJson(clientRes, 405, { error: { message: "Method not allowed", code: "method_not_allowed" } });
+    return;
+  }
+  if (!GRSAI_API_KEY) {
+    writeCorsHeaders(clientReq, clientRes);
+    writeJson(clientRes, 503, {
+      error: { message: "grsai backend not configured", code: "service_unavailable" },
+    });
+    return;
+  }
+
+  const chunks = [];
+  let totalSize = 0;
+  let aborted = false;
+  clientReq.on("data", (chunk) => {
+    if (aborted) return;
+    totalSize += chunk.length;
+    if (totalSize > MAX_GRSAI_IMAGE_BYTES + 1024 * 1024) {
+      aborted = true;
+      writeCorsHeaders(clientReq, clientRes);
+      writeJson(clientRes, 413, {
+        error: { message: "payload too large", code: "IMAGE_TOO_LARGE" },
+      });
+      clientReq.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  clientReq.on("end", async () => {
+    if (aborted) return;
+    let payload;
+    try {
+      payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    } catch (err) {
+      writeCorsHeaders(clientReq, clientRes);
+      writeJson(clientRes, 400, {
+        error: { message: `invalid JSON body: ${err.message}`, code: "invalid_request" },
+      });
+      return;
+    }
+
+    const prompt = typeof payload.prompt === "string" ? payload.prompt.trim() : "";
+    if (!prompt) {
+      writeCorsHeaders(clientReq, clientRes);
+      writeJson(clientRes, 400, {
+        error: { message: "prompt is required", code: "invalid_request" },
+      });
+      return;
+    }
+
+    const imageUrls = collectImageUrls(payload);
+    if (imageUrls.length === 0) {
+      writeCorsHeaders(clientReq, clientRes);
+      writeJson(clientRes, 400, {
+        error: { message: "image_b64 (data URL) is required", code: "invalid_request" },
+      });
+      return;
+    }
+
+    const slotsRequested = clamp(parseInt(payload.n, 10) || 1, 1, MAX_SLOTS);
+    const slotPayload = {
+      prompt,
+      size: payload.size,
+      n: 1,
+    };
+
+    const settled = await Promise.allSettled(
+      Array.from({ length: slotsRequested }, () => callGrsai(slotPayload, imageUrls))
+    );
+
+    const successes = [];
+    const failures = [];
+    for (const s of settled) {
+      if (s.status === "fulfilled") successes.push(s.value);
+      else failures.push(s.reason);
+    }
+
+    if (successes.length > 0) {
+      const data = successes.flatMap((s) => (Array.isArray(s.data) ? s.data : []));
+      writeCorsHeaders(clientReq, clientRes);
+      writeJson(clientRes, 200, { created: Math.floor(Date.now() / 1000), data });
+      console.log(
+        `[${new Date().toISOString()}] POST /api/grsai/edits -> 200 (${successes.length}/${slotsRequested} ok) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
+      );
+      return;
+    }
+
+    if (failures.some((f) => looksLikeModeration(f && f.message))) {
+      writeCorsHeaders(clientReq, clientRes);
+      writeJson(clientRes, 400, {
+        error: {
+          message: "grsai rejected the request, likely due to content moderation.",
+          code: "content_policy_violation",
+        },
+      });
+      console.log(
+        `[${new Date().toISOString()}] POST /api/grsai/edits -> 400 (moderation) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
+      );
+      return;
+    }
+
+    writeCorsHeaders(clientReq, clientRes);
+    writeJson(clientRes, 502, {
+      error: {
+        message: failures[0]?.message || "grsai request failed",
+        code: "upstream_error",
+      },
+    });
+    console.log(
+      `[${new Date().toISOString()}] POST /api/grsai/edits -> 502 (all ${slotsRequested} failed) · ${((Date.now() - t0) / 1000).toFixed(1)}s`
+    );
+  });
+  clientReq.on("error", (err) => {
+    writeCorsHeaders(clientReq, clientRes);
+    writeJson(clientRes, 400, {
+      error: { message: `request read error: ${err.message}`, code: "invalid_request" },
+    });
+  });
+}
+
+function collectImageUrls(payload) {
+  const out = [];
+  const push = (val) => {
+    if (typeof val !== "string") return;
+    const trimmed = val.trim();
+    if (!trimmed) return;
+    if (!trimmed.startsWith("data:image/")) return;
+    out.push(trimmed);
+  };
+  push(payload.image_b64);
+  push(payload.image);
+  if (Array.isArray(payload.image_b64s)) payload.image_b64s.forEach(push);
+  if (Array.isArray(payload.image_urls)) payload.image_urls.forEach(push);
+  if (Array.isArray(payload.images)) payload.images.forEach(push);
+  return out;
 }
 
 function looksLikeModeration(message) {
